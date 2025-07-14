@@ -1,0 +1,16 @@
+# Core requirements for BOAR
+python>=3.6
+
+# Optional but recommended for advanced features
+pwntools>=4.0.0
+ropper>=1.13.0
+ROPgadget>=6.0.0
+
+# For additional analysis capabilities
+requests>=2.25.0
+colorama>=0.4.0
+tabulate>=0.8.0
+
+# For report generation
+jinja2>=3.0.0
+matplotlib>=3.3.0
