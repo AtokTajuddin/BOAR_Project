@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0b0b">
+  <meta name="description" content="BOAR is a client-side rule engine for finding potential buffer overflows, double frees, use-after-free, and format-string bugs in C and C++ source.">
+  <title>BOAR — Memory Safety Lab</title>
+  <link rel="stylesheet" href="iso.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="iso" data-theme="dark">
+  <a class="skip-link" href="#workspace">Skip to analyzer</a>
+
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="BOAR home">
+      <span class="brand-mark" aria-hidden="true">B</span>
+      <span class="brand-text">BOAR <small>Memory Safety Lab</small></span>
+    </a>
+    <nav class="topnav" aria-label="Primary">
+      <a href="#workspace">Analyzer</a>
+      <a href="#rules">Rules</a>
+      <a href="#limits">Limits</a>
+      <a href="https://github.com/AtokTajuddin/BOAR_Project" rel="noreferrer">GitHub</a>
+    </nav>
+    <span class="badge"><i aria-hidden="true"></i> static · client-side</span>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Buffer Overflow Analysis &amp; Remediation</p>
+        <h1>Read the stack<br><em>before it breaks.</em></h1>
+        <p class="lede">Paste C or C++ source. Fourteen memory-safety rules inspect it for overflow, double-free, use-after-free, stack-escape, and format-string hazards — entirely in your browser.</p>
+        <div class="hero-actions">
+          <button class="button primary" id="hero-analyze" type="button">Analyze sample</button>
+          <label class="button ghost" for="file-input">Upload source</label>
+          <input id="file-input" type="file" accept=".c,.h,.cc,.cpp,.cxx,.hpp,.hh,.hxx,.ino,text/plain" hidden>
+          <a class="button quiet" href="#rules">See the rule pack</a>
+        </div>
+        <dl class="hero-stats" aria-label="Analyzer summary">
+          <div><dt>Rules</dt><dd id="stat-rules">14</dd></div>
+          <div><dt>Findings</dt><dd id="stat-findings">0</dd></div>
+          <div><dt>Uploads</dt><dd id="stat-upload">None</dd></div>
+        </dl>
+      </div>
+
+      <figure class="hero-figure">
+        <div class="hero-card">
+          <div class="hero-corners" aria-hidden="true">
+            <span>Fig 1</span>
+            <span>Memory safety bench</span>
+            <span>Hover to probe a severity tray</span>
+            <span id="hero-readout" data-readout>all · 0 findings</span>
+          </div>
+          <div
+            id="hero-stage"
+            class="hero-stage"
+            tabindex="0"
+            role="slider"
+            aria-label="Memory safety bench. Use arrow keys to move the probe between severity trays."
+            aria-valuemin="0"
+            aria-valuemax="4"
+            aria-valuenow="4"
+            aria-valuetext="all severities, 0 findings"
+          ></div>
+        </div>
+        <figcaption class="hero-caption">
+          <span class="key"><i class="key-lit" aria-hidden="true"></i> The lit probe reads the selected severity tray.</span>
+          <span class="key"><i class="key-flat" aria-hidden="true"></i> Four trays: critical, high, medium, low. The dial counts findings; the canary lamp lights on a critical hit.</span>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section id="workspace" class="workspace" aria-labelledby="workspace-title">
+      <div class="panel editor-panel">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Source</p>
+            <h2 id="workspace-title">Drop a file or paste code</h2>
+          </div>
+          <div class="panel-actions">
+            <button class="mini" id="sample-button" type="button">Sample</button>
+            <button class="mini" id="clear-button" type="button">Clear</button>
+            <button class="mini accent" id="analyze-button" type="button">Analyze</button>
+          </div>
+        </div>
+        <div class="editor-wrap">
+          <div class="gutter" id="gutter" aria-hidden="true">1</div>
+          <textarea id="source" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="C or C++ source code"></textarea>
+        </div>
+        <div class="drop-zone" id="drop-zone">
+          <span>Drop a <code>.c</code> / <code>.h</code> / <code>.cpp</code> file here</span>
+          <span class="drop-note">or use Upload source. Nothing leaves this page.</span>
+        </div>
+        <div class="editor-foot">
+          <span id="status" role="status" aria-live="polite">Ready.</span>
+          <span id="cursor">Ln 1, Col 1</span>
+        </div>
+      </div>
+
+      <aside class="panel findings-panel" aria-labelledby="findings-title">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Triage</p>
+            <h2 id="findings-title">Findings</h2>
+          </div>
+          <div class="summary-total"><strong id="total-findings">0</strong><span>total</span></div>
+        </div>
+        <div class="summary-bar" id="summary-bar" aria-hidden="true"></div>
+        <div class="filters" id="filters" role="group" aria-label="Filter findings by severity"></div>
+        <div id="findings" class="findings" aria-live="polite"></div>
+      </aside>
+    </section>
+
+    <section id="rules" class="section" aria-labelledby="rules-title">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Rule pack</p>
+          <h2 id="rules-title">Fourteen checks, one JSON contract</h2>
+        </div>
+        <p class="section-note">The browser loads the same <code>boar_rules.json</code> used by the CLI. Add a rule file with <code>--rules</code> locally; the web build copies the pack at build time.</p>
+      </div>
+      <div class="rule-grid" id="rule-grid"></div>
+    </section>
+
+    <section id="limits" class="section limits" aria-labelledby="limits-title">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Scope</p>
+          <h2 id="limits-title">What this page can and cannot prove</h2>
+        </div>
+      </div>
+      <div class="limit-grid">
+        <article class="limit-card">
+          <h3>Static heuristics</h3>
+          <p>This is a source-level triage tool, not a proof. It has no full dataflow, points-to, or interprocedural analysis. Use ASan, UBSan, Valgrind, and fuzzing to confirm a finding.</p>
+        </article>
+        <article class="limit-card">
+          <h3>No native execution</h3>
+          <p>GitHub Pages serves static files only. The browser cannot run GDB, execute a target binary, discover a live offset, or generate a working exploit. Those stay in the local CLI.</p>
+        </article>
+        <article class="limit-card">
+          <h3>Private by default</h3>
+          <p>The analyzer is plain JavaScript. Source is read with the File API and never uploaded. The page needs no backend, account, or network request after loading.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>BOAR · Buffer Overflow Analysis &amp; Remediation Framework</span>
+    <span>MIT · built for authorized testing</span>
+  </footer>
+
+  <script src="rules.js"></script>
+  <script src="hero.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

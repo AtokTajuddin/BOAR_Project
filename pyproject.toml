@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boar-sec"
+version = "1.2.0"
+description = "BOAR - Rule-based C/C++ Memory-Safety Analysis & Hardening Framework"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Atok Tajuddin" }
+]
+keywords = ["security", "static-analysis", "memory-safety", "sast", "sarif", "c", "cpp"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+  "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.scripts]
+boar = "BOAR_beta:main"
+
+[tool.setuptools]
+py-modules = ["BOAR_beta", "boar_engine"]
+include-package-data = true
+
+[tool.setuptools.data-files]
+"." = ["boar_rules.json"]

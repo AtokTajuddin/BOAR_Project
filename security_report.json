@@ -1,272 +1,197 @@
 {
-  "timestamp": "2025-07-12T06:48:29.891566",
-  "total_vulnerabilities": 18,
-  "severity_breakdown": {
-    "CRITICAL": 2,
-    "HIGH": 14,
-    "MEDIUM": 2,
-    "LOW": 0
+  "tool": "BOAR",
+  "version": "1.2.0",
+  "timestamp": "2026-11-24T23:05:25.425106",
+  "target": "test_vulnerable.c",
+  "rules_loaded": 14,
+  "summary": {
+    "critical": 1,
+    "high": 6,
+    "medium": 2,
+    "low": 0,
+    "info": 0,
+    "total": 9
   },
-  "detailed_findings": [
+  "findings": [
     {
-      "line_number": 12,
-      "function": "gets",
-      "severity": "CRITICAL",
-      "cve_refs": [
-        "CVE-2012-3489",
-        "CVE-2015-1781",
-        "CVE-2016-4051"
+      "id": "BOAR-MEM-001",
+      "rule": "gets-unbounded-read",
+      "severity": "critical",
+      "confidence": "high",
+      "cwe": [
+        "CWE-242",
+        "CWE-120"
       ],
-      "description": "Fungsi gets() tidak melakukan bound checking, sangat mudah di-overflow",
-      "remediation": "Gunakan fgets() dengan buffer size yang tepat",
-      "line_content": "gets(buffer);  // Dangerous! No bounds checking",
+      "references": [
+        "CVE-2016-4051",
+        "CVE-2012-3489"
+      ],
       "file": "test_vulnerable.c",
-      "example_exploit": "payload = \"A\" * 1024 + return_address"
+      "line": 12,
+      "column": 5,
+      "code": "gets(buffer);  // Dangerous! No bounds checking",
+      "description": "gets() reads without a bound and overwrites the destination buffer.",
+      "remediation": "Replace gets() with fgets(buffer, sizeof(buffer), stdin) and handle the trailing newline."
     },
     {
-      "line_number": 74,
-      "function": "gets",
-      "severity": "CRITICAL",
-      "cve_refs": [
-        "CVE-2012-3489",
-        "CVE-2015-1781",
-        "CVE-2016-4051"
+      "id": "BOAR-MEM-002",
+      "rule": "unbounded-string-copy",
+      "severity": "high",
+      "confidence": "high",
+      "cwe": [
+        "CWE-120",
+        "CWE-787"
       ],
-      "description": "Fungsi gets() tidak melakukan bound checking, sangat mudah di-overflow",
-      "remediation": "Gunakan fgets() dengan buffer size yang tepat",
-      "line_content": "printf(\"  1 - gets() vulnerability\\n\");",
-      "file": "test_vulnerable.c",
-      "example_exploit": "payload = \"A\" * 1024 + return_address"
-    },
-    {
-      "line_number": 19,
-      "function": "strcpy",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2005-1544",
+      "references": [
         "CVE-2017-14107",
-        "CVE-2019-9169"
-      ],
-      "description": "strcpy() tidak memeriksa ukuran buffer destination",
-      "remediation": "Gunakan strncpy() atau strlcpy() dengan size limit",
-      "line_content": "strcpy(buffer, input);  // Dangerous! No size checking",
-      "file": "test_vulnerable.c",
-      "example_exploit": "strcpy(buffer, long_string) -> buffer overflow"
-    },
-    {
-      "line_number": 75,
-      "function": "strcpy",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2005-1544",
-        "CVE-2017-14107",
-        "CVE-2019-9169"
-      ],
-      "description": "strcpy() tidak memeriksa ukuran buffer destination",
-      "remediation": "Gunakan strncpy() atau strlcpy() dengan size limit",
-      "line_content": "printf(\"  2 - strcpy() vulnerability\\n\");",
-      "file": "test_vulnerable.c",
-      "example_exploit": "strcpy(buffer, long_string) -> buffer overflow"
-    },
-    {
-      "line_number": 41,
-      "function": "strcat",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2006-1168",
-        "CVE-2012-2372",
         "CVE-2018-16529"
       ],
-      "description": "strcat() tidak memeriksa ukuran buffer destination",
-      "remediation": "Gunakan strncat() dengan size calculation yang benar",
-      "line_content": "strcat(buffer, input);  // Dangerous! No size checking",
       "file": "test_vulnerable.c",
-      "example_exploit": "strcat(buffer, input) -> heap/stack overflow"
+      "line": 19,
+      "column": 5,
+      "code": "strcpy(buffer, input);  // Dangerous! No size checking",
+      "description": "Unbounded string copy/concatenation can write past the destination buffer when the source exceeds capacity.",
+      "remediation": "Use strlcpy()/strlcat() where available, or snprintf() with an explicit destination capacity."
     },
     {
-      "line_number": 78,
-      "function": "strcat",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2006-1168",
-        "CVE-2012-2372",
-        "CVE-2018-16529"
+      "id": "BOAR-MEM-003",
+      "rule": "unbounded-format-copy",
+      "severity": "high",
+      "confidence": "medium",
+      "cwe": [
+        "CWE-120",
+        "CWE-787"
       ],
-      "description": "strcat() tidak memeriksa ukuran buffer destination",
-      "remediation": "Gunakan strncat() dengan size calculation yang benar",
-      "line_content": "printf(\"  5 - strcat() vulnerability\\n\");",
-      "file": "test_vulnerable.c",
-      "example_exploit": "strcat(buffer, input) -> heap/stack overflow"
-    },
-    {
-      "line_number": 26,
-      "function": "sprintf",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2005-0202",
+      "references": [
         "CVE-2017-9047",
         "CVE-2020-12767"
       ],
-      "description": "sprintf() dapat menyebabkan buffer overflow dengan format string",
-      "remediation": "Gunakan snprintf() dengan buffer size limit",
-      "line_content": "sprintf(buffer, \"Hello %s\", input);  // Dangerous if input is too long",
       "file": "test_vulnerable.c",
-      "example_exploit": "sprintf(buf, \"%s\", long_input) -> overflow"
+      "line": 26,
+      "column": 5,
+      "code": "sprintf(buffer, \"Hello %s\", input);  // Dangerous if input is too long",
+      "description": "sprintf()/vsprintf() can produce output larger than the destination buffer.",
+      "remediation": "Use snprintf()/vsnprintf() with the destination size, and bound %s conversions."
     },
     {
-      "line_number": 76,
-      "function": "sprintf",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2005-0202",
-        "CVE-2017-9047",
-        "CVE-2020-12767"
+      "id": "BOAR-MEM-004",
+      "rule": "scanf-string-overflow",
+      "severity": "high",
+      "confidence": "high",
+      "cwe": [
+        "CWE-120",
+        "CWE-787"
       ],
-      "description": "sprintf() dapat menyebabkan buffer overflow dengan format string",
-      "remediation": "Gunakan snprintf() dengan buffer size limit",
-      "line_content": "printf(\"  3 - sprintf() vulnerability\\n\");",
-      "file": "test_vulnerable.c",
-      "example_exploit": "sprintf(buf, \"%s\", long_input) -> overflow"
-    },
-    {
-      "line_number": 34,
-      "function": "scanf",
-      "severity": "MEDIUM",
-      "cve_refs": [
+      "references": [
         "CVE-2012-3489",
         "CVE-2015-1781"
       ],
-      "description": "scanf() dengan %s tanpa width specifier dapat overflow",
-      "remediation": "Gunakan scanf(\"%99s\", buffer) atau fgets()",
-      "line_content": "scanf(\"%s\", buffer);  // Dangerous! No width specifier",
       "file": "test_vulnerable.c",
-      "example_exploit": "scanf(\"%s\", buffer) + long input -> overflow"
+      "line": 34,
+      "column": 5,
+      "code": "scanf(\"%s\", buffer);  // Dangerous! No width specifier",
+      "description": "A %s/%[...] conversion without a field width or with a width exceeding destination capacity (including NUL) can overflow the buffer.",
+      "remediation": "Specify a field width of at most sizeof(buffer) - 1 (e.g. %63s for a 64-byte buffer), or read with fgets().",
+      "note": "unbounded '%s' conversion can overflow destination"
     },
     {
-      "line_number": 48,
-      "function": "memcpy",
-      "severity": "MEDIUM",
-      "cve_refs": [
-        "CVE-2016-1238",
-        "CVE-2019-11477"
+      "id": "BOAR-MEM-002",
+      "rule": "unbounded-string-copy",
+      "severity": "high",
+      "confidence": "high",
+      "cwe": [
+        "CWE-120",
+        "CWE-787"
       ],
-      "description": "memcpy() tanpa bound checking dapat menyebabkan overflow",
-      "remediation": "Validasi size parameter dan gunakan safe alternatives",
-      "line_content": "memcpy(buffer, input, size);  // Dangerous if size > 100",
+      "references": [
+        "CVE-2017-14107",
+        "CVE-2018-16529"
+      ],
       "file": "test_vulnerable.c",
-      "example_exploit": "memcpy(dst, src, user_controlled_size) -> overflow"
+      "line": 41,
+      "column": 5,
+      "code": "strcat(buffer, input);  // Dangerous! No size checking",
+      "description": "Unbounded string copy/concatenation can write past the destination buffer when the source exceeds capacity.",
+      "remediation": "Use strlcpy()/strlcat() where available, or snprintf() with an explicit destination capacity."
     },
     {
-      "line_number": 60,
-      "function": "alloca",
-      "severity": "HIGH",
-      "cve_refs": [
+      "id": "BOAR-MEM-006",
+      "rule": "format-string-injection",
+      "severity": "high",
+      "confidence": "high",
+      "cwe": [
+        "CWE-134"
+      ],
+      "references": [
+        "CVE-2000-0573",
+        "CVE-2005-1125"
+      ],
+      "file": "test_vulnerable.c",
+      "line": 54,
+      "column": 5,
+      "code": "printf(input);  // Dangerous! User input as format string",
+      "description": "A non-literal format string lets an attacker control conversions such as %n and %s.",
+      "remediation": "Pass an explicit format: printf(\"%s\", input) instead of printf(input)."
+    },
+    {
+      "id": "BOAR-MEM-007",
+      "rule": "variable-size-alloca",
+      "severity": "high",
+      "confidence": "high",
+      "cwe": [
+        "CWE-770",
+        "CWE-121"
+      ],
+      "references": [
         "CVE-2016-3706",
         "CVE-2017-1000366"
       ],
-      "description": "alloca() dengan user input dapat menyebabkan stack overflow",
-      "remediation": "Gunakan malloc() dengan size validation",
-      "line_content": "char *buffer = alloca(size);  // Dangerous with user-controlled size",
       "file": "test_vulnerable.c",
-      "example_exploit": "alloca(user_size) -> stack exhaustion"
+      "line": 60,
+      "column": 20,
+      "code": "char *buffer = alloca(size);  // Dangerous with user-controlled size",
+      "description": "alloca() with a variable size can exhaust or overflow the stack.",
+      "remediation": "Validate the size and use a fixed bound, or allocate on the heap with malloc() and check for failure."
     },
     {
-      "line_number": 81,
-      "function": "alloca",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2016-3706",
-        "CVE-2017-1000366"
+      "id": "BOAR-MEM-005",
+      "rule": "unbounded-memory-copy",
+      "severity": "medium",
+      "confidence": "medium",
+      "cwe": [
+        "CWE-120",
+        "CWE-787"
       ],
-      "description": "alloca() dengan user input dapat menyebabkan stack overflow",
-      "remediation": "Gunakan malloc() dengan size validation",
-      "line_content": "printf(\"  8 - alloca() vulnerability\\n\");",
+      "references": [
+        "CVE-2019-11477",
+        "CVE-2016-1238"
+      ],
       "file": "test_vulnerable.c",
-      "example_exploit": "alloca(user_size) -> stack exhaustion"
+      "line": 48,
+      "column": 5,
+      "code": "memcpy(buffer, input, size);  // Dangerous if size > 100",
+      "description": "A raw memory operation uses a length that exceeds or is not proven to fit the destination buffer.",
+      "remediation": "Validate the length against the destination capacity; prefer sizeof(destination) or an explicit bounds check."
     },
     {
-      "line_number": 24,
-      "function": "format_string",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2000-0573",
-        "CVE-2005-1125"
+      "id": "BOAR-MEM-005",
+      "rule": "unbounded-memory-copy",
+      "severity": "medium",
+      "confidence": "medium",
+      "cwe": [
+        "CWE-120",
+        "CWE-787"
       ],
-      "description": "Format string vulnerability - user input sebagai format string",
-      "remediation": "Gunakan printf(\"%s\", user_input) bukan printf(user_input)",
-      "line_content": "void vulnerable_sprintf(char *input) {",
-      "file": "test_vulnerable.c",
-      "example_exploit": "Complex pattern - requires manual analysis"
-    },
-    {
-      "line_number": 53,
-      "function": "format_string",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2000-0573",
-        "CVE-2005-1125"
+      "references": [
+        "CVE-2019-11477",
+        "CVE-2016-1238"
       ],
-      "description": "Format string vulnerability - user input sebagai format string",
-      "remediation": "Gunakan printf(\"%s\", user_input) bukan printf(user_input)",
-      "line_content": "void vulnerable_printf(char *input) {",
       "file": "test_vulnerable.c",
-      "example_exploit": "Complex pattern - requires manual analysis"
-    },
-    {
-      "line_number": 76,
-      "function": "format_string",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2000-0573",
-        "CVE-2005-1125"
-      ],
-      "description": "Format string vulnerability - user input sebagai format string",
-      "remediation": "Gunakan printf(\"%s\", user_input) bukan printf(user_input)",
-      "line_content": "printf(\"  3 - sprintf() vulnerability\\n\");",
-      "file": "test_vulnerable.c",
-      "example_exploit": "Complex pattern - requires manual analysis"
-    },
-    {
-      "line_number": 80,
-      "function": "format_string",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2000-0573",
-        "CVE-2005-1125"
-      ],
-      "description": "Format string vulnerability - user input sebagai format string",
-      "remediation": "Gunakan printf(\"%s\", user_input) bukan printf(user_input)",
-      "line_content": "printf(\"  7 - printf() format string vulnerability\\n\");",
-      "file": "test_vulnerable.c",
-      "example_exploit": "Complex pattern - requires manual analysis"
-    },
-    {
-      "line_number": 96,
-      "function": "format_string",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2000-0573",
-        "CVE-2005-1125"
-      ],
-      "description": "Format string vulnerability - user input sebagai format string",
-      "remediation": "Gunakan printf(\"%s\", user_input) bukan printf(user_input)",
-      "line_content": "if (argc > 2) vulnerable_sprintf(argv[2]);",
-      "file": "test_vulnerable.c",
-      "example_exploit": "Complex pattern - requires manual analysis"
-    },
-    {
-      "line_number": 111,
-      "function": "format_string",
-      "severity": "HIGH",
-      "cve_refs": [
-        "CVE-2000-0573",
-        "CVE-2005-1125"
-      ],
-      "description": "Format string vulnerability - user input sebagai format string",
-      "remediation": "Gunakan printf(\"%s\", user_input) bukan printf(user_input)",
-      "line_content": "if (argc > 2) vulnerable_printf(argv[2]);",
-      "file": "test_vulnerable.c",
-      "example_exploit": "Complex pattern - requires manual analysis"
+      "line": 61,
+      "column": 5,
+      "code": "memset(buffer, 'A', size);",
+      "description": "A raw memory operation uses a length that exceeds or is not proven to fit the destination buffer.",
+      "remediation": "Validate the length against the destination capacity; prefer sizeof(destination) or an explicit bounds check."
     }
   ]
 }

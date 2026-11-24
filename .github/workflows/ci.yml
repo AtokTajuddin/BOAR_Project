@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run unit and web-engine parity tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Verify CLI SARIF generation
+        run: |
+          python BOAR_beta.py --no-banner static test_vulnerable.c --format sarif --report boar-results.sarif
+          python -c "import json; d = json.load(open('boar-results.sarif')); assert d['version'] == '2.1.0' and len(d['runs'][0]['results']) > 0"
