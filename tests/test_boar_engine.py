@@ -132,6 +132,19 @@ void f(void) {
 """
         self.assertEqual(ids(source), [])
 
+    def test_malloc_sizeof_deref_is_not_flagged_as_alloc_arithmetic(self):
+        source = """\
+struct item { int a; };
+void f(size_t n) {
+    struct item *one = malloc(sizeof(*one));
+    struct item *fixed = malloc(16 * sizeof(*fixed));
+    struct item *dyn = malloc(n * sizeof(*dyn));
+}
+"""
+        findings = [finding for finding in findings_for(source)
+                    if finding["id"] == "BOAR-MEM-008"]
+        self.assertEqual([f["line"] for f in findings], [5])
+
 
 class NewRuleTests(unittest.TestCase):
     def test_bounded_string_copy_catches_strncat_sizeof_and_unterminated_strncpy(self):

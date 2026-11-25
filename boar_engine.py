@@ -1046,23 +1046,47 @@ def _m_variable_size_alloc(rule, call, context):
     return "low" if context.eval_int(call["args"][0]) is not None else "high"
 
 
+def _scrub_sizeof(expression):
+    """Replace balanced sizeof(...) and sizeof ident with a constant token."""
+    out = []
+    i = 0
+    pattern = re.compile(r"\bsizeof\b")
+    while i < len(expression):
+        match = pattern.search(expression, i)
+        if not match:
+            out.append(expression[i:])
+            break
+        out.append(expression[i:match.start()])
+        cursor = match.end()
+        while cursor < len(expression) and expression[cursor].isspace():
+            cursor += 1
+        if cursor < len(expression) and expression[cursor] == "(":
+            depth = 1
+            cursor += 1
+            while cursor < len(expression) and depth:
+                if expression[cursor] == "(":
+                    depth += 1
+                elif expression[cursor] == ")":
+                    depth -= 1
+                cursor += 1
+            out.append("8")
+            i = cursor
+        else:
+            ident = re.match(r"[A-Za-z_]\w*", expression[cursor:])
+            out.append("8")
+            i = cursor + (ident.end() if ident else 0)
+    return "".join(out)
+
+
 def _m_alloc_arithmetic(rule, call, context):
     size_idx = 1 if call["name"] == "realloc" else 0
     if len(call["args"]) <= size_idx:
         return None
-    expr = call["args"][size_idx]
-    if "*" not in expr and "+" not in expr:
+    scrubbed = _scrub_sizeof(call["args"][size_idx])
+    if "*" not in scrubbed and "+" not in scrubbed:
         return None
-    if context.eval_int(expr) is not None:
+    if context.eval_int(scrubbed) is not None:
         return None
-    # Allow pure sizeof(T) + constant when no runtime variable participates
-    if "*" not in expr:
-        parts = [part.strip() for part in expr.split("+")]
-        if all(
-            context.eval_int(p) is not None or _sizeof_target(p) is not None
-            for p in parts
-        ):
-            return None
     return "medium"
 
 

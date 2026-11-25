@@ -14,15 +14,18 @@
     all: "All",
   };
   const SEVERITY_COLOR = {
-    critical: "#ff6b6b",
-    high: "#ffa94d",
-    medium: "#6b9bff",
-    low: "#6be0a0",
+    critical: "#f05252",
+    high: "#e08c3b",
+    medium: "#4c8bf5",
+    low: "#3fb984",
   };
   const SEVERITY_RANK = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
   const FILTER_KEYS = ["all", "critical", "high", "medium", "low"];
 
-  const SAMPLE = `#include <stdio.h>
+  const PRESETS = {
+    mixed: {
+      name: "mixed_hazards.c",
+      code: `#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -37,16 +40,10 @@ void read_name(void) {
 }
 
 void copy_note(char *input, int size) {
-    char note[NOTE_CAP];
+    char note[NOTE_CAP] = "tag: ";
     strcpy(note, input);
     strncat(note, input, sizeof(note));
     memcpy(note, input, size);
-    sprintf(note, "note: %s", input);
-}
-
-void read_count(void) {
-    char count[8];
-    scanf("%99s", count);
 }
 
 char *leak_stack(int n) {
@@ -64,7 +61,85 @@ int main(int argc, char **argv) {
     if (argc > 1) copy_note(argv[1], 32);
     return 0;
 }
-`;
+`,
+    },
+    io: {
+      name: "parser_io.c",
+      code: `#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+
+#define TOKEN_MAX 16
+enum { HEADER_CAP = 32 };
+
+int parse_packet(int fd, int payload_len) {
+    char token[TOKEN_MAX];
+    char header[HEADER_CAP];
+
+    scanf("%31s", token);
+    fgets(header, 128, stdin);
+    read(fd, header, payload_len);
+    strncpy(header, token, sizeof(header));
+    return 0;
+}
+`,
+    },
+    lifetime: {
+      name: "heap_lifetime.c",
+      code: `#include <stdlib.h>
+#include <string.h>
+
+struct record {
+    int id;
+    char label[24];
+};
+
+int process_records(size_t count, int abort_early) {
+    struct record *rec = malloc(sizeof(rec));
+    struct record *batch = malloc(count * sizeof(struct record));
+    if (!rec || !batch) return -1;
+
+    if (abort_early) {
+        free(rec);
+    }
+    rec->id = 42;
+    free(batch);
+    return 0;
+}
+`,
+    },
+    safe: {
+      name: "remediated_safe.c",
+      code: `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define NAME_CAP 32
+
+struct record {
+    int id;
+    char name[NAME_CAP];
+};
+
+struct record *create_record(const char *input) {
+    struct record *rec = calloc(1, sizeof(*rec));
+    if (!rec) return NULL;
+
+    snprintf(rec->name, sizeof(rec->name), "%s", input);
+    return rec;
+}
+
+int read_bounded_token(void) {
+    char token[16];
+    if (fgets(token, sizeof(token), stdin) == NULL) {
+        return -1;
+    }
+    printf("%s\\n", token);
+    return 0;
+}
+`,
+    },
+  };
 
   const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
   const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -716,6 +791,37 @@ int main(int argc, char **argv) {
     return match ? match[1] : null;
   }
 
+  function scrubSizeof(expression) {
+    let out = "";
+    let i = 0;
+    const re = /\bsizeof\b/g;
+    let match;
+    while ((match = re.exec(expression))) {
+      out += expression.slice(i, match.index);
+      let cursor = match.index + match[0].length;
+      while (cursor < expression.length && /\s/.test(expression[cursor])) cursor += 1;
+      if (expression[cursor] === "(") {
+        let depth = 1;
+        cursor += 1;
+        while (cursor < expression.length && depth) {
+          if (expression[cursor] === "(") depth += 1;
+          else if (expression[cursor] === ")") depth -= 1;
+          cursor += 1;
+        }
+        out += "8";
+        i = cursor;
+        re.lastIndex = i;
+      } else {
+        const ident = /^[A-Za-z_]\w*/.exec(expression.slice(cursor));
+        out += "8";
+        i = cursor + (ident ? ident[0].length : 0);
+        re.lastIndex = i;
+      }
+    }
+    out += expression.slice(i);
+    return out;
+  }
+
   function sizeofTarget(expression) {
     const match = /^\s*sizeof\s*(?:\(\s*([A-Za-z_]\w*)\s*\)|([A-Za-z_]\w*))\s*$/.exec(expression);
     return match ? (match[1] || match[2]) : null;
@@ -908,13 +1014,9 @@ int main(int argc, char **argv) {
     alloc_arithmetic(rule, call, context) {
       const sizeIdx = call.name === "realloc" ? 1 : 0;
       if (call.args.length <= sizeIdx) return null;
-      const expr = call.args[sizeIdx];
-      if (!expr.includes("*") && !expr.includes("+")) return null;
-      if (context.evalInt(expr) !== null) return null;
-      if (!expr.includes("*")) {
-        const parts = expr.split("+").map((p) => p.trim());
-        if (parts.every((p) => context.evalInt(p) !== null || sizeofTarget(p) !== null)) return null;
-      }
+      const scrubbed = scrubSizeof(call.args[sizeIdx]);
+      if (!scrubbed.includes("*") && !scrubbed.includes("+")) return null;
+      if (context.evalInt(scrubbed) !== null) return null;
       return "medium";
     },
 
@@ -1351,15 +1453,31 @@ int main(int argc, char **argv) {
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
   // ---------------------------------------------------------------------------
-  // Page state and rendering.
+  // Page state and workbench rendering.
   // ---------------------------------------------------------------------------
+
+  const SARIF_LEVEL = {
+    critical: "error",
+    high: "error",
+    medium: "warning",
+    low: "note",
+    info: "note",
+  };
+  const SARIF_SCORE = {
+    critical: "9.0",
+    high: "7.5",
+    medium: "5.0",
+    low: "2.5",
+    info: "1.0",
+  };
 
   const state = {
     findings: [],
     filter: "all",
-    fileName: "sample.c",
+    preset: "mixed",
+    fileName: PRESETS.mixed.name,
     uploadName: null,
-    analyzedAt: 0,
+    ruleQuery: "",
   };
 
   const els = {
@@ -1373,12 +1491,17 @@ int main(int argc, char **argv) {
     total: $("#total-findings"),
     statFindings: $("#stat-findings"),
     statRules: $("#stat-rules"),
-    statUpload: $("#stat-upload"),
-    ruleGrid: $("#rule-grid"),
+    statTarget: $("#stat-target"),
+    navRuleCount: $("#nav-rule-count"),
+    ruleTbody: $("#rule-tbody"),
+    ruleSearch: $("#rule-search"),
     dropZone: $("#drop-zone"),
     fileInput: $("#file-input"),
-    heroStage: $("#hero-stage"),
-    heroReadout: $("#hero-readout"),
+    presetTabs: $("#preset-tabs"),
+    copyCli: $("#copy-cli"),
+    cliCommand: $("#cli-command"),
+    copyJsonButton: $("#copy-json-button"),
+    exportSarifButton: $("#export-sarif-button"),
   };
 
   function countsFor(findings) {
@@ -1389,17 +1512,92 @@ int main(int argc, char **argv) {
     return counts;
   }
 
+  function buildSarifDocument() {
+    const ruleIndex = new Map();
+    const sarifRules = RULES.map((rule, idx) => {
+      ruleIndex.set(rule.id, idx);
+      const sev = (rule.severity || "medium").toLowerCase();
+      const helpParts = [rule.description || ""];
+      if (rule.remediation) helpParts.push(`Remediation: ${rule.remediation}`);
+      if (Array.isArray(rule.references) && rule.references.length) {
+        helpParts.push(`References: ${rule.references.join(", ")}`);
+      }
+      return {
+        id: rule.id,
+        name: rule.name,
+        shortDescription: { text: rule.description || rule.name },
+        help: { text: helpParts.filter(Boolean).join("\n") },
+        defaultConfiguration: { level: SARIF_LEVEL[sev] || "warning" },
+        properties: {
+          tags: ["security", "memory-safety", ...(rule.cwe || [])],
+          precision: rule.confidence || "medium",
+          "security-severity": SARIF_SCORE[sev] || "5.0",
+        },
+      };
+    });
+
+    const results = state.findings.map((finding) => {
+      const sev = (finding.severity || "medium").toLowerCase();
+      const text = finding.note ? `${finding.description} (${finding.note})` : finding.description;
+      const entry = {
+        ruleId: finding.id,
+        level: SARIF_LEVEL[sev] || "warning",
+        message: { text },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: finding.file },
+              region: {
+                startLine: Math.max(1, finding.line),
+                startColumn: Math.max(1, finding.column),
+                snippet: { text: finding.code || "" },
+              },
+            },
+          },
+        ],
+        properties: {
+          severity: sev,
+          confidence: finding.confidence,
+          cwe: finding.cwe,
+        },
+      };
+      if (ruleIndex.has(finding.id)) entry.ruleIndex = ruleIndex.get(finding.id);
+      return entry;
+    });
+
+    return {
+      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      version: "2.1.0",
+      runs: [
+        {
+          tool: {
+            driver: {
+              name: "BOAR",
+              fullName: "BOAR - Buffer Overflow Analysis & Remediation Framework",
+              version: "1.2.0",
+              informationUri: "https://github.com/AtokTajuddin/BOAR_Project",
+              rules: sarifRules,
+            },
+          },
+          results,
+        },
+      ],
+    };
+  }
+
   function render() {
     const counts = countsFor(state.findings);
+    const activeTarget = state.uploadName || state.fileName;
     els.total.textContent = String(counts.all);
     els.statFindings.textContent = String(counts.all);
     els.statRules.textContent = String(RULES.length);
-    els.statUpload.textContent = state.uploadName || "None";
+    els.statTarget.textContent = activeTarget;
+    if (els.navRuleCount) els.navRuleCount.textContent = String(RULES.length);
     renderSummaryBar(counts);
     renderFilters(counts);
     renderFindings();
+    updateGutter();
     updateStatus();
-    updateHero(counts);
   }
 
   function renderSummaryBar(counts) {
@@ -1447,13 +1645,18 @@ int main(int argc, char **argv) {
     if (!visible.length) {
       const empty = document.createElement("div");
       empty.className = "empty";
+      const dot = document.createElement("i");
+      dot.className = "empty-indicator";
+      dot.setAttribute("aria-hidden", "true");
       const strong = document.createElement("strong");
-      strong.textContent = state.findings.length ? "Nothing in this tray." : "No findings.";
+      strong.textContent = state.findings.length
+        ? `No ${state.filter} diagnostics`
+        : "Zero potential issues matched";
       const span = document.createElement("span");
       span.textContent = state.findings.length
-        ? "Try another severity, or edit the source and scan again."
-        : "The loaded rules did not match. Paste more code or load the sample to see the analyzer in action.";
-      empty.append(strong, span);
+        ? "Switch severity filters above to inspect findings in other categories."
+        : "None of the 14 static memory-safety rules fired on this buffer.";
+      empty.append(dot, strong, span);
       els.findings.replaceChildren(empty);
       return;
     }
@@ -1480,11 +1683,11 @@ int main(int argc, char **argv) {
     severity.textContent = SEVERITY_LABEL[finding.severity];
     const id = document.createElement("span");
     id.className = "rule-id";
-    id.textContent = finding.id;
-    const confidence = document.createElement("span");
-    confidence.className = "confidence";
-    confidence.textContent = `${finding.confidence} confidence`;
-    top.append(severity, id, confidence);
+    id.textContent = `${finding.id} · ${finding.confidence}`;
+    const loc = document.createElement("span");
+    loc.className = "loc-badge";
+    loc.textContent = `Ln ${finding.line}:${finding.column}`;
+    top.append(severity, id, loc);
 
     const name = document.createElement("span");
     name.className = "finding-name";
@@ -1496,65 +1699,109 @@ int main(int argc, char **argv) {
 
     const why = document.createElement("span");
     why.className = "finding-why";
-    why.textContent = finding.note ? `${finding.description} ${finding.note}.` : finding.description;
+    why.textContent = finding.note ? `${finding.description} (${finding.note})` : finding.description;
 
     const fix = document.createElement("span");
     fix.className = "finding-fix";
     const fixLabel = document.createElement("strong");
-    fixLabel.textContent = "Fix: ";
+    fixLabel.textContent = "Remediation: ";
     fix.append(fixLabel, document.createTextNode(finding.remediation || "Review this path manually."));
 
     const meta = document.createElement("span");
     meta.className = "finding-meta";
-    const parts = [`line ${finding.line}:${finding.column}`];
+    const parts = [];
     if (finding.cwe.length) parts.push(finding.cwe.join(", "));
-    if (finding.references.length) parts.push(finding.references.slice(0, 2).join(", "));
+    if (finding.references.length) parts.push(`Ref: ${finding.references.slice(0, 2).join(", ")}`);
     meta.textContent = parts.join(" · ");
 
-    card.append(top, name, code, why, fix, meta);
-    card.addEventListener("click", () => selectLine(finding.line, finding.column));
+    card.append(top, name, code, why, fix);
+    if (parts.length) card.append(meta);
+    card.addEventListener("click", () => selectLine(finding.line));
     return card;
   }
 
   function renderRules() {
+    const query = state.ruleQuery.trim().toLowerCase();
+    const filtered = !query
+      ? RULES
+      : RULES.filter((rule) => {
+          const hay = [
+            rule.id,
+            rule.name,
+            rule.severity,
+            ...(rule.cwe || []),
+            ...(rule.functions || []),
+            rule.description,
+          ].join(" ").toLowerCase();
+          return hay.includes(query);
+        });
+
     const fragment = document.createDocumentFragment();
-    RULES.forEach((rule, index) => {
-      const card = document.createElement("article");
-      card.className = "rule-card";
+    for (const rule of filtered) {
+      const tr = document.createElement("tr");
 
-      const idx = document.createElement("span");
-      idx.className = "idx";
-      idx.textContent = String(index + 1).padStart(2, "0");
+      const tdId = document.createElement("td");
+      tdId.className = "col-id";
+      tdId.textContent = rule.id;
 
-      const body = document.createElement("div");
-      const title = document.createElement("h3");
-      title.textContent = rule.name;
-      const description = document.createElement("p");
-      description.textContent = rule.description;
-      body.append(title, description);
+      const tdName = document.createElement("td");
+      tdName.className = "col-name";
+      tdName.textContent = rule.name;
 
-      const severity = document.createElement("span");
-      severity.className = "sev";
-      severity.style.setProperty("--sev", SEVERITY_COLOR[rule.severity] || "var(--muted)");
-      severity.textContent = SEVERITY_LABEL[rule.severity] || rule.severity;
+      const tdSev = document.createElement("td");
+      const sevBadge = document.createElement("span");
+      sevBadge.className = "sev";
+      sevBadge.style.setProperty("--sev", SEVERITY_COLOR[rule.severity] || "var(--muted)");
+      sevBadge.textContent = SEVERITY_LABEL[rule.severity] || rule.severity;
+      tdSev.append(sevBadge);
 
-      card.append(idx, body, severity);
-      fragment.append(card);
-    });
-    els.ruleGrid.replaceChildren(fragment);
+      const tdCwe = document.createElement("td");
+      tdCwe.className = "col-cwe";
+      tdCwe.textContent = (rule.cwe || []).join(", ") || "—";
+
+      const tdFns = document.createElement("td");
+      tdFns.className = "col-fns";
+      const fnList = rule.functions && rule.functions.length
+        ? rule.functions.slice(0, 5).join(", ") + (rule.functions.length > 5 ? ", …" : "")
+        : `${rule.matcher} (flow)`;
+      tdFns.textContent = fnList;
+
+      const tdDesc = document.createElement("td");
+      tdDesc.className = "col-desc";
+      tdDesc.textContent = rule.description;
+
+      tr.append(tdId, tdName, tdSev, tdCwe, tdFns, tdDesc);
+      fragment.append(tr);
+    }
+    els.ruleTbody.replaceChildren(fragment);
   }
 
   function updateStatus() {
     const lineCount = els.source.value.split("\n").length;
     const label = state.uploadName || state.fileName;
-    els.status.textContent = `${state.findings.length} findings · ${lineCount} lines · ${label}`;
+    els.status.textContent = `${state.findings.length} ${state.findings.length === 1 ? "finding" : "findings"} · ${lineCount} lines · ${label}`;
   }
 
   function updateGutter() {
     const lineCount = Math.max(1, els.source.value.split("\n").length);
-    const numbers = [];
-    for (let line = 1; line <= lineCount; line += 1) numbers.push(line);
-    els.gutter.textContent = numbers.join("\n");
+    const lineSeverity = new Map();
+    for (const finding of state.findings) {
+      const prev = lineSeverity.get(finding.line);
+      if (!prev || (SEVERITY_RANK[finding.severity] ?? 9) < (SEVERITY_RANK[prev] ?? 9)) {
+        lineSeverity.set(finding.line, finding.severity);
+      }
+    }
+
+    const fragment = document.createDocumentFragment();
+    for (let line = 1; line <= lineCount; line += 1) {
+      const row = document.createElement("span");
+      row.className = "gutter-line";
+      const sev = lineSeverity.get(line);
+      if (sev) row.dataset.sev = sev;
+      row.textContent = String(line);
+      fragment.append(row);
+    }
+    els.gutter.replaceChildren(fragment);
     els.gutter.scrollTop = els.source.scrollTop;
   }
 
@@ -1567,7 +1814,7 @@ int main(int argc, char **argv) {
     els.cursor.textContent = `Ln ${line}, Col ${column}`;
   }
 
-  function selectLine(line, column) {
+  function selectLine(line) {
     const lines = els.source.value.split("\n");
     if (line < 1 || line > lines.length) return;
     let start = 0;
@@ -1576,9 +1823,10 @@ int main(int argc, char **argv) {
     els.source.focus();
     els.source.setSelectionRange(start, end);
     const style = getComputedStyle(els.source);
-    const lineHeight = parseFloat(style.lineHeight) || 22;
+    const lineHeight = parseFloat(style.lineHeight) || 21;
     const padding = parseFloat(style.paddingTop) || 0;
     els.source.scrollTop = Math.max(0, padding + (line - 1) * lineHeight - els.source.clientHeight * 0.32);
+    els.gutter.scrollTop = els.source.scrollTop;
     updateCursor();
   }
 
@@ -1588,25 +1836,33 @@ int main(int argc, char **argv) {
     const counts = countsFor(state.findings);
     renderFilters(counts);
     renderFindings();
-    updateHero(counts);
   }
 
   function analyze() {
-    state.findings = analyzeSource(els.source.value, state.fileName);
-    state.analyzedAt = Date.now();
+    const targetName = state.uploadName || state.fileName;
+    state.findings = analyzeSource(els.source.value, targetName);
     render();
   }
 
   function scheduleAnalyze() {
     window.clearTimeout(scheduleAnalyze.timer);
-    scheduleAnalyze.timer = window.setTimeout(analyze, 260);
+    scheduleAnalyze.timer = window.setTimeout(analyze, 200);
   }
 
-  function setSource(text, name, uploaded) {
+  function updatePresetTabs(activeKey) {
+    state.preset = activeKey;
+    for (const tab of $$(".tab", els.presetTabs)) {
+      const isMatch = tab.dataset.preset === activeKey;
+      tab.classList.toggle("is-active", isMatch);
+      tab.setAttribute("aria-selected", String(isMatch));
+    }
+  }
+
+  function setSource(text, name, uploaded, presetKey = null) {
     els.source.value = text;
     state.fileName = name || "untitled.c";
     state.uploadName = uploaded ? name : null;
-    updateGutter();
+    updatePresetTabs(presetKey);
     updateCursor();
     analyze();
   }
@@ -1614,190 +1870,80 @@ int main(int argc, char **argv) {
   async function readFile(file) {
     if (!file) return;
     const text = await file.text();
-    setSource(text, file.name, true);
+    setSource(text, file.name, true, null);
   }
 
-  // ---------------------------------------------------------------------------
-  // Anatomy hero: four severity trays under a probe and a dial.
-  // ---------------------------------------------------------------------------
-
-  const hero = {
-    mounted: false,
-    layers: {},
-    projection: null,
-    x: 0,
-    tip: 0,
-    needle: 0,
-    targetX: 0,
-    targetTip: 0,
-    targetNeedle: 0,
-    targetIndex: 0,
-    counts: { all: 0, critical: 0, high: 0, medium: 0, low: 0 },
-    frame: 0,
-    reduced: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-    stationX: [],
-    stationLabels: [],
-  };
-
-  function iso(point, projection) {
-    const a = (projection.azimuth * Math.PI) / 180;
-    const e = (projection.elevation * Math.PI) / 180;
-    const k = projection.scale * Math.sqrt(1.6);
-    const [x, y, z] = point;
-    return [
-      projection.origin[0] + (x * Math.sin(a) - y * Math.cos(a)) * k,
-      projection.origin[1] + ((x * Math.cos(a) + y * Math.sin(a)) * Math.sin(e) - z * Math.cos(e)) * k,
-    ];
+  function flashButtonLabel(button, message) {
+    const original = button.dataset.origLabel || button.textContent;
+    button.dataset.origLabel = original;
+    button.textContent = message;
+    window.clearTimeout(button._flashTimer);
+    button._flashTimer = window.setTimeout(() => {
+      button.textContent = original;
+    }, 1500);
   }
 
-  function round(value, digits = 2) {
-    const factor = 10 ** digits;
-    return Math.round(value * factor) / factor;
+  async function copyText(text, button, label = "Copied") {
+    try {
+      await navigator.clipboard.writeText(text);
+      flashButtonLabel(button, label);
+    } catch {
+      flashButtonLabel(button, "Copy failed");
+    }
   }
 
-  function translateAlong(by) {
-    const origin = iso([0, 0, 0], hero.projection);
-    const moved = iso(by, hero.projection);
-    return `translate(${round(moved[0] - origin[0])} ${round(moved[1] - origin[1])})`;
-  }
-
-  function lineOnTop(from, to, z) {
-    const a = iso([from[0], from[1], z], hero.projection);
-    const b = iso([to[0], to[1], z], hero.projection);
-    return `M${round(a[0])} ${round(a[1])}L${round(b[0])} ${round(b[1])}`;
-  }
-
-  function needlePath(turns) {
-    const angle = turns * Math.PI * 2;
-    const { x, y, top, radius } = HERO.dial;
-    return lineOnTop(
-      [x - Math.sin(angle) * 3.4, y + Math.cos(angle) * 3.4],
-      [x + Math.sin(angle) * (radius - 4), y - Math.cos(angle) * (radius - 4)],
-      top + 0.2,
-    );
-  }
-
-  function heightUnder(carriageX) {
-    const probe = HERO.dial.x;
-    let top = HERO.base;
-    HERO.heights.forEach((height, index) => {
-      const center = carriageX + probe - HERO.stops[index];
-      if (Math.abs(center - probe) <= 7.8 + HERO.dial.tipRadius) {
-        top = Math.max(top, HERO.base + height);
-      }
+  function exportSarif() {
+    const sarif = buildSarifDocument();
+    const blob = new Blob([JSON.stringify(sarif, null, 2)], {
+      type: "application/sarif+json;charset=utf-8",
     });
-    return top;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const stem = (state.uploadName || state.fileName || "boar").replace(/\.[^.]+$/, "");
+    link.href = url;
+    link.download = `${stem}.sarif`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    flashButtonLabel(els.exportSarifButton, "Exported");
   }
-
-  function mountHero() {
-    if (!HERO || !els.heroStage) return;
-    els.heroStage.innerHTML = HERO.svg;
-    hero.mounted = true;
-    hero.projection = HERO.projection;
-    hero.stationX = [HERO.home, ...HERO.stops];
-    hero.stationLabels = ["all", ...HERO.severities];
-    hero.x = HERO.home;
-    hero.tip = HERO.base;
-    hero.needle = 0;
-    hero.targetX = HERO.home;
-    hero.targetTip = HERO.base;
-    hero.targetNeedle = 0;
-    hero.layers.carriage = $('[data-part="carriage"]', els.heroStage);
-    hero.layers.plunger = $('[data-part="plunger"]', els.heroStage);
-    hero.layers.needle = $('[data-part="needle"]', els.heroStage);
-    hero.layers.canary = $('[data-part="canary-glow"]', els.heroStage);
-    drawHero();
-
-    els.heroStage.addEventListener("pointermove", (event) => {
-      const box = els.heroStage.getBoundingClientRect();
-      const share = clamp((event.clientX - box.left) / box.width, 0, 1);
-      const index = Math.round(share * (FILTER_KEYS.length - 1));
-      selectFilter(FILTER_KEYS[index]);
-    });
-    els.heroStage.addEventListener("keydown", (event) => {
-      const current = FILTER_KEYS.indexOf(state.filter);
-      let next = null;
-      if (event.key === "ArrowRight" || event.key === "ArrowUp") next = Math.max(0, current - 1);
-      if (event.key === "ArrowLeft" || event.key === "ArrowDown") next = Math.min(FILTER_KEYS.length - 1, current + 1);
-      if (event.key === "Home") next = 0;
-      if (event.key === "End") next = FILTER_KEYS.length - 1;
-      if (next === null) return;
-      event.preventDefault();
-      selectFilter(FILTER_KEYS[next]);
-    });
-  }
-
-  function updateHero(counts) {
-    if (!hero.mounted) return;
-    hero.counts = counts;
-    hero.targetIndex = Math.max(0, FILTER_KEYS.indexOf(state.filter));
-    hero.targetX = hero.stationX[hero.targetIndex];
-    hero.targetNeedle = (state.filter === "all" ? counts.all : counts[state.filter] || 0) / HERO.dial.perTurn;
-    if (hero.reduced) {
-      hero.x = hero.targetX;
-      hero.tip = heightUnder(hero.x);
-      hero.needle = hero.targetNeedle;
-      drawHero();
-      return;
-    }
-    if (!hero.frame) hero.frame = window.requestAnimationFrame(tickHero);
-  }
-
-  function tickHero() {
-    hero.frame = 0;
-    hero.x += (hero.targetX - hero.x) * 0.14;
-    hero.tip += (heightUnder(hero.x) - hero.tip) * 0.2;
-    hero.needle += (hero.targetNeedle - hero.needle) * 0.16;
-    const settled = Math.abs(hero.targetX - hero.x) < 0.01
-      && Math.abs(heightUnder(hero.x) - hero.tip) < 0.01
-      && Math.abs(hero.targetNeedle - hero.needle) < 0.002;
-    if (settled) {
-      hero.x = hero.targetX;
-      hero.tip = heightUnder(hero.x);
-      hero.needle = hero.targetNeedle;
-    }
-    drawHero();
-    if (!settled) hero.frame = window.requestAnimationFrame(tickHero);
-  }
-
-  function drawHero() {
-    if (!hero.mounted) return;
-    if (hero.layers.carriage) {
-      hero.layers.carriage.setAttribute("transform", translateAlong([hero.x, 0, 0]));
-    }
-    if (hero.layers.plunger) {
-      hero.layers.plunger.setAttribute("transform", translateAlong([0, 0, hero.tip]));
-    }
-    if (hero.layers.needle) {
-      hero.layers.needle.setAttribute("d", needlePath(hero.needle));
-    }
-    if (hero.layers.canary) {
-      hero.layers.canary.style.opacity = hero.counts.critical > 0 ? "0.86" : "0.14";
-    }
-
-    const label = SEVERITY_LABEL[state.filter] || "All";
-    const count = state.filter === "all" ? hero.counts.all : hero.counts[state.filter] || 0;
-    const readout = `${label.toLowerCase()} · ${count} ${count === 1 ? "finding" : "findings"}`;
-    if (els.heroReadout && els.heroReadout.textContent !== readout) els.heroReadout.textContent = readout;
-    els.heroStage.setAttribute("aria-valuenow", String(hero.targetIndex));
-    els.heroStage.setAttribute("aria-valuetext", readout);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Wiring.
-  // ---------------------------------------------------------------------------
 
   function bindEvents() {
     $("#analyze-button").addEventListener("click", analyze);
-    $("#hero-analyze").addEventListener("click", () => {
-      setSource(SAMPLE, "sample.c", false);
-      $("#workspace").scrollIntoView({ behavior: "smooth", block: "start" });
+    $("#clear-button").addEventListener("click", () => setSource("", "scratch.c", false, null));
+
+    els.presetTabs.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-preset]");
+      if (!btn) return;
+      const key = btn.dataset.preset;
+      const preset = PRESETS[key];
+      if (preset) setSource(preset.code, preset.name, false, key);
     });
-    $("#sample-button").addEventListener("click", () => setSource(SAMPLE, "sample.c", false));
-    $("#clear-button").addEventListener("click", () => setSource("", "untitled.c", false));
+
+    els.copyCli.addEventListener("click", () => {
+      copyText(els.cliCommand.textContent, els.copyCli);
+    });
+
+    els.copyJsonButton.addEventListener("click", () => {
+      const payload = {
+        tool: "BOAR",
+        version: "1.2.0",
+        target: state.uploadName || state.fileName,
+        rules_loaded: RULES.length,
+        findings: state.findings,
+      };
+      copyText(JSON.stringify(payload, null, 2), els.copyJsonButton);
+    });
+
+    els.exportSarifButton.addEventListener("click", exportSarif);
+
+    els.ruleSearch.addEventListener("input", () => {
+      state.ruleQuery = els.ruleSearch.value;
+      renderRules();
+    });
 
     els.source.addEventListener("input", () => {
-      updateGutter();
       updateCursor();
       scheduleAnalyze();
     });
@@ -1811,6 +1957,14 @@ int main(int argc, char **argv) {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
         analyze();
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const start = els.source.selectionStart;
+        const end = els.source.selectionEnd;
+        els.source.setRangeText("    ", start, end, "end");
+        updateCursor();
+        scheduleAnalyze();
       }
     });
 
@@ -1846,8 +2000,7 @@ int main(int argc, char **argv) {
     }
     renderRules();
     bindEvents();
-    mountHero();
-    setSource(SAMPLE, "sample.c", false);
+    setSource(PRESETS.mixed.code, PRESETS.mixed.name, false, "mixed");
   }
 
   init();
